@@ -35,7 +35,7 @@ int startPressing = 0;
 int stopPressing = 0;
 elapsedMillis oldCounter = 0; // used to time setting oldX & oldY so that it happens once per second
 
-float oldX = 0; // X from 1 second ago, no matter how many readings
+float oldX = 0; // X from scrollSampleFrame/2 ago, no matter how many readings
 float oldY = 0;
 float ppX = 0;  //previous PREVIOUS x
 float ppY = 0;
@@ -52,7 +52,7 @@ float pvY;
 float aX;  // change between vx and pvx
 float aY;
 
-float scrollVX = 0;
+float scrollVX = 0; // change between X and oldX over "scrollTimeFrame," not over the length of the loop -- this makes it easier to flick the scroll
 float scrollVY = 0;
 
 float simulatedScrollVX = 0;
@@ -62,8 +62,12 @@ float simulatedScrollX = 0;
 float simulatedScrollY = 0;
 
 const float scrollDecel = 0.025; // How fast the simulated scroll loses speed
-const int scrollTimeFrame = 200; // How long the scrollVX and VY are calculated across 
-const int scrollTimeOffset = 2; // How much leeway is given between readings
+const int scrollSampleFrame = 200; // How long the scrollVX and VY are calculated across 
+const int scrollTimeFrame = 40; // How often the simulated scroll should be calculated
+const int simulatedScrollResolution = 2; // The interval for scroll wheel ticks, bigger numbers lead to less vibration
+
+int xClickInterval = 0; // Allows me to track the last time the scroll wheel "ticked," so it doesn't tick multiple timers per the "simulatedScrollResolution"
+int yClickInterval = 0;
 
 void setup() {
   pinMode(irqpin, INPUT);
@@ -80,13 +84,14 @@ void setup() {
 
 
 void loop() {
-  if(oldCounter % scrollTimeFrame < (scrollTimeOffset * isScrolling ? 2 : 1) || oldCounter % scrollTimeFrame > scrollTimeFrame - (scrollTimeOffset * isScrolling ? 2 : 1)) {
+  if(oldCounter % scrollSampleFrame == 0) {
     oldX = X;
     oldY = Y;
-
-    updateSimulatedScroll();
   }
 
+  if(oldCounter % scrollTimeFrame == 0 && isScrolling) {
+    updateSimulatedScroll();
+  }
 
   setPreviousPositions();
 
@@ -94,7 +99,7 @@ void loop() {
 
   calcVelocities();
 
-  if(oldCounter % scrollTimeFrame > (scrollTimeFrame / 2) - (scrollTimeOffset * isScrolling ? 2 : 1) || oldCounter % scrollTimeFrame < (scrollTimeFrame / 2) + (scrollTimeOffset * isScrolling ? 2 : 1)) {
+  if(oldCounter % scrollSampleFrame == (scrollSampleFrame / 2)) { // Using the middle of the scroll time frame because if I did it at the end there would be issues with the velocity
     calcScrollVelocities();
 
     if(abs(simulatedScrollVX) > 0 || abs(simulatedScrollVY) > 0) {
@@ -105,6 +110,12 @@ void loop() {
       Serial.print(simulatedScrollVX);
       Serial.print(" ");
       Serial.print(simulatedScrollVY);
+      Serial.print(" ");
+      Serial.print(isScrolling);
+      Serial.print(" ");
+      Serial.print(isPressed);
+      Serial.print("    ---   ");
+      Serial.print(millis());
       Serial.println();
     }
   }
@@ -112,7 +123,7 @@ void loop() {
 
   calcAccelerations();
 
-  if (!std::isnan(X) || !std::isnan(Y)) {
+  if (!std::isnan(X) || !std::isnan(Y)) { // If there's some reading on the touchpad
     // Serial.print("X:");
     // Serial.print(X, 2);
     // Serial.print(" Y:");
@@ -130,7 +141,8 @@ void loop() {
       startPressing = millis();
       isPressed = true;
       clickPress();
-    } else if (isScrolling && (abs(simulatedScrollVX) > 0 || abs(simulatedScrollVY) > 0)) { // "Catches" the scroll wheel when you tap the pad
+    } else if (abs(simulatedScrollVX) > 0 || abs(simulatedScrollVY) > 0) { // "Catches" the scroll wheel when you tap the pad
+      isPressed = true;
       resetSimulatedScroll();
     }
 
@@ -138,16 +150,20 @@ void loop() {
       isScrolling = true;
     }
  
-  } else {
+  } else { // If there's no reading on the touchpad
     if (isPressed && (abs(scrollVX) > 0.5 || abs(scrollVY) > 0.5)){
       isPressed = false;
       isScrolling = true;
+      clearPosInfo();
 
-      simulatedScrollVX = scrollVX;
+      simulatedScrollVX = scrollVX; // + 1 - 1 so that the references in memory are different
       simulatedScrollVY = scrollVY;
+
+
     } else if (isPressed) {
       isPressed = false;
       stopPressing = millis();
+      clearPosInfo();
 
       if (stopPressing - startPressing > 50 && stopPressing - startPressing < 1000 && !isScrolling) {
         clickRelease();
@@ -162,7 +178,7 @@ void loop() {
 
   if (isScrolling && X > 0 && X < 4 && Y > 0 && Y < 4 && ((vX != 0 && !std::isnan(vX)) || (vY != 0 && !std::isnan(vY)))) {
     scrollClick();
-  } else if (isScrolling && (abs(simulatedScrollVX) > 0.0001 || abs(simulatedScrollVY) > 0.0001)) {
+  } else if (isScrolling && !isPressed && (abs(simulatedScrollVX) > 0.0001 || abs(simulatedScrollVY) > 0.0001)) {
     playSimulatedScroll();
   }
 
@@ -394,19 +410,15 @@ void updateSimulatedScroll() {
     simulatedScrollVY += scrollDecel;
   }
 
-  if(!isPressed && abs(simulatedScrollVX) < 0.0001 && abs(simulatedScrollVY) < 0.0001) {
+  if(!isPressed && abs(simulatedScrollVX) < 0.001 && abs(simulatedScrollVY) < 0.001) {
     isScrolling = false;
   }
 }
 
-const int simulatedScrollResolution = 1;
-
-int xClickInterval = 0;
-int yClickInterval = 0;
-
 void playSimulatedScroll() {
-  if((int) (simulatedScrollX / simulatedScrollResolution) != xClickInterval) { // || (int) (simulatedScrollY * 10000) % (200 * 10000) == 0
+  if((int) (simulatedScrollX / simulatedScrollResolution) != xClickInterval || (int) (simulatedScrollY / simulatedScrollResolution) != yClickInterval) { // || (int) (simulatedScrollY * 10000) % (200 * 10000) == 0
     xClickInterval = (int) (simulatedScrollX / simulatedScrollResolution);
+    yClickInterval = (int) (simulatedScrollY / simulatedScrollResolution);
     scrollClick();
   } else {
     delayMicroseconds(400);
@@ -414,8 +426,31 @@ void playSimulatedScroll() {
 }
 
 void resetSimulatedScroll() {
+  isScrolling = false;
+
   simulatedScrollVX = 0;
   simulatedScrollVY = 0;
   simulatedScrollX = 0;
   simulatedScrollY = 0;
+  scrollVX = 0;
+  scrollVY = 0;
+  oldX = X;
+  oldY = Y;
+}
+
+void clearPosInfo() {
+  ppX = 0;  //previous PREVIOUS x
+  ppY = 0;
+  pX = 0;  //previous x
+  pY = 0;
+  X = NAN;  // x -- NaN so it doesn't start clicked
+  Y = NAN;
+
+  vX = NULL;  // change between x and pX
+  vY = NULL;
+  pvX = NULL;  // change between pX and ppX
+  pvY = NULL;
+
+  aX = NULL;  // change between vx and pvx
+  aY = NULL;
 }
