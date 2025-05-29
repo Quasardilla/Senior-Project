@@ -33,7 +33,10 @@ boolean isScrolling = false;
 
 int startPressing = 0;
 int stopPressing = 0;
+elapsedMillis oldCounter = 0; // used to time setting oldX & oldY so that it happens once per second
 
+float oldX = 0; // X from 1 second ago, no matter how many readings
+float oldY = 0;
 float ppX = 0;  //previous PREVIOUS x
 float ppY = 0;
 float pX = 0;  //previous x
@@ -49,7 +52,16 @@ float pvY;
 float aX;  // change between vx and pvx
 float aY;
 
-int count = 0;
+float scrollVX = 0;
+float scrollVY = 0;
+
+float simulatedScrollVX = 0;
+float simulatedScrollVY = 0;
+
+const float scrollDecel = 0.05; // How fast the simulated scroll loses speed
+const int scrollTimeFrame = 200; // How long the scrollVX and VY are calculated across 
+elapsedMillis scrollTimerX = 0;
+elapsedMillis scrollTimerY = 0;
 
 void setup() {
   pinMode(irqpin, INPUT);
@@ -64,63 +76,94 @@ void setup() {
 }
 
 void loop() {
+  if(oldCounter % scrollTimeFrame < 5 || oldCounter % scrollTimeFrame > 195) {
+    oldX = X;
+    oldY = Y;
+
+    updateSimulatedScroll();
+  }
+
+
   setPreviousPositions();
 
   readTouchInputs();
 
   calcVelocities();
 
+  if(oldCounter % scrollTimeFrame > 95 || oldCounter % scrollTimeFrame < 105) {
+    calcScrollVelocities();
+
+    Serial.print(scrollVX);
+    Serial.print(" ");
+    Serial.print(scrollVY);
+    Serial.print(" ");
+    Serial.print(simulatedScrollVX);
+    Serial.print(" ");
+    Serial.println(simulatedScrollVY);
+  }
+
   calcAccelerations();
 
-  count++;
-
   if (!std::isnan(X) || !std::isnan(Y)) {
-    Serial.print("X:");
-    Serial.print(X, 2);
-    Serial.print(" Y:");
-    Serial.print(Y, 2);
-    Serial.print(" vX:");
-    Serial.print(vX, 2);
-    Serial.print(" vY:");
-    Serial.print(vY, 2);
-    Serial.print(" aX:");
-    Serial.print(aX, 2);
-    Serial.print(" aY:");
-    Serial.println(aY, 2);
+    // Serial.print("X:");
+    // Serial.print(X, 2);
+    // Serial.print(" Y:");
+    // Serial.print(Y, 2);
+    // Serial.print(" vX:");
+    // Serial.print(vX, 2);
+    // Serial.print(" vY:");
+    // Serial.print(vY, 2);
+    // Serial.print(" aX:");
+    // Serial.print(aX, 2);
+    // Serial.print(" aY:");
+    // Serial.println(aY, 2);
 
     if (!isPressed && !isScrolling) {
       startPressing = millis();
       isPressed = true;
       clickPress();
+    } else if (isScrolling && (simulatedScrollVX > 0 || simulatedScrollVY > 0)) { // "Catches" the scroll wheel when you tap the pad
+      simulatedScrollVX = 0;
+      simulatedScrollVY = 0;
     }
 
-    if (millis() - startPressing > 100 && (vX != 0 && !std::isnan(vX)) || (vY != 0 && !std::isnan(vY))) {
+    if (millis() - startPressing > 100 && ((vX != 0 && !std::isnan(vX)) || (vY != 0 && !std::isnan(vY)))) {
       isScrolling = true;
-      isPressed = false;
     }
  
   } else {
-    if (isPressed) {
+    if (isPressed && (abs(scrollVX) > 0.5 || abs(scrollVY) > 0.5)){
+      isPressed = false;
+      isScrolling = true;
+
+      simulatedScrollVX = scrollVX;
+      simulatedScrollVY = scrollVY;
+
+      scrollTimerX = 0;
+      scrollTimerY = 0;
+    } else if (isPressed) {
       isPressed = false;
       stopPressing = millis();
 
-      if (stopPressing - startPressing > 50 && stopPressing - startPressing < 1000) {
+      if (stopPressing - startPressing > 50 && stopPressing - startPressing < 1000 && !isScrolling) {
         clickRelease();
       }
 
       startPressing = 0;
       stopPressing = 0;
-    } else if (isScrolling) {
+    } else if (isScrolling && abs(scrollVX) < 1 && abs(scrollVY) < 1) {
       isScrolling = false;
     }
   }
 
   if (isScrolling && X > 0 && X < 4 && Y > 0 && Y < 4 && ((vX != 0 && !std::isnan(vX)) || (vY != 0 && !std::isnan(vY)))) {
     scrollClick();
+  } else if (isScrolling && (abs(simulatedScrollVX) > 0.0001 || abs(simulatedScrollVY) > 0.0001)) {
+    playSimulatedScroll();
   }
 
   if(isScrolling)
-    delay(0); // Allows the touchpad to be reactive of MUCH higher speeds -- 2.85x faster than normal (there's a 700 microSecond delay from each scroll tick)
+    delay(0); // Allows the touchpad to be reactive of MUCH higher speeds -- 5x faster than normal (there's a 400 microSecond delay from each scroll tick)
   else
     delay(2);
 }
@@ -315,10 +358,42 @@ void calcVelocities() {
     pvY = pY - ppY;
 }
 
+void calcScrollVelocities() {
+    if(!std::isnan(X) && !std::isnan(oldX))
+      scrollVX = X - oldX;
+
+    if(!std::isnan(Y) && !std::isnan(oldY))
+      scrollVY = Y - oldY;
+}
+
 void calcAccelerations() {
   if(!std::isnan(vX) && !std::isnan(pvX))
     aX = vX - pvX;
   
   if(!std::isnan(vY) && !std::isnan(pvY))
     aY = vY - pvY;
+}
+
+void updateSimulatedScroll() {
+  if(simulatedScrollVX > 0.0001) {
+    simulatedScrollVX -= scrollDecel;
+  } else if(simulatedScrollVX < -0.0001) {
+    simulatedScrollVX += scrollDecel;
+  }
+
+  if(simulatedScrollVY > 0.0001) {
+    simulatedScrollVY -= scrollDecel;
+  } else if(simulatedScrollVY < -0.0001) {
+    simulatedScrollVY += scrollDecel;
+  }
+
+  if(!isPressed && abs(simulatedScrollVX) < 0.0001 && abs(simulatedScrollVY) < 0.0001) {
+    isScrolling = false;
+  }
+}
+
+void playSimulatedScroll() {
+  if(scrollTimerX % (int) (60 - simulatedScrollVX * 30) < 20 || scrollTimerY % (int) (60 - simulatedScrollVY * 30) < 20) {
+    scrollClick();
+  }
 }
