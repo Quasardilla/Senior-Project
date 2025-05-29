@@ -58,10 +58,12 @@ float scrollVY = 0;
 float simulatedScrollVX = 0;
 float simulatedScrollVY = 0;
 
-const float scrollDecel = 0.05; // How fast the simulated scroll loses speed
+float simulatedScrollX = 0;
+float simulatedScrollY = 0;
+
+const float scrollDecel = 0.025; // How fast the simulated scroll loses speed
 const int scrollTimeFrame = 200; // How long the scrollVX and VY are calculated across 
-elapsedMillis scrollTimerX = 0;
-elapsedMillis scrollTimerY = 0;
+const int scrollTimeOffset = 2; // How much leeway is given between readings
 
 void setup() {
   pinMode(irqpin, INPUT);
@@ -75,8 +77,10 @@ void setup() {
   playStartupSound();
 }
 
+
+
 void loop() {
-  if(oldCounter % scrollTimeFrame < 5 || oldCounter % scrollTimeFrame > 195) {
+  if(oldCounter % scrollTimeFrame < (scrollTimeOffset * isScrolling ? 2 : 1) || oldCounter % scrollTimeFrame > scrollTimeFrame - (scrollTimeOffset * isScrolling ? 2 : 1)) {
     oldX = X;
     oldY = Y;
 
@@ -90,17 +94,21 @@ void loop() {
 
   calcVelocities();
 
-  if(oldCounter % scrollTimeFrame > 95 || oldCounter % scrollTimeFrame < 105) {
+  if(oldCounter % scrollTimeFrame > (scrollTimeFrame / 2) - (scrollTimeOffset * isScrolling ? 2 : 1) || oldCounter % scrollTimeFrame < (scrollTimeFrame / 2) + (scrollTimeOffset * isScrolling ? 2 : 1)) {
     calcScrollVelocities();
 
-    Serial.print(scrollVX);
-    Serial.print(" ");
-    Serial.print(scrollVY);
-    Serial.print(" ");
-    Serial.print(simulatedScrollVX);
-    Serial.print(" ");
-    Serial.println(simulatedScrollVY);
+    if(abs(simulatedScrollVX) > 0 || abs(simulatedScrollVY) > 0) {
+      Serial.print(simulatedScrollX);
+      Serial.print(" ");
+      Serial.print(simulatedScrollY);
+      Serial.print(" ");
+      Serial.print(simulatedScrollVX);
+      Serial.print(" ");
+      Serial.print(simulatedScrollVY);
+      Serial.println();
+    }
   }
+
 
   calcAccelerations();
 
@@ -122,9 +130,8 @@ void loop() {
       startPressing = millis();
       isPressed = true;
       clickPress();
-    } else if (isScrolling && (simulatedScrollVX > 0 || simulatedScrollVY > 0)) { // "Catches" the scroll wheel when you tap the pad
-      simulatedScrollVX = 0;
-      simulatedScrollVY = 0;
+    } else if (isScrolling && (abs(simulatedScrollVX) > 0 || abs(simulatedScrollVY) > 0)) { // "Catches" the scroll wheel when you tap the pad
+      resetSimulatedScroll();
     }
 
     if (millis() - startPressing > 100 && ((vX != 0 && !std::isnan(vX)) || (vY != 0 && !std::isnan(vY)))) {
@@ -138,9 +145,6 @@ void loop() {
 
       simulatedScrollVX = scrollVX;
       simulatedScrollVY = scrollVY;
-
-      scrollTimerX = 0;
-      scrollTimerY = 0;
     } else if (isPressed) {
       isPressed = false;
       stopPressing = millis();
@@ -375,15 +379,18 @@ void calcAccelerations() {
 }
 
 void updateSimulatedScroll() {
-  if(simulatedScrollVX > 0.0001) {
+  simulatedScrollX += simulatedScrollVX;
+  simulatedScrollY += simulatedScrollVY;
+
+  if(simulatedScrollVX > scrollDecel / 5000) {
     simulatedScrollVX -= scrollDecel;
-  } else if(simulatedScrollVX < -0.0001) {
+  } else if(simulatedScrollVX < -scrollDecel / 5000) {
     simulatedScrollVX += scrollDecel;
   }
 
-  if(simulatedScrollVY > 0.0001) {
+  if(simulatedScrollVY > scrollDecel / 5000) {
     simulatedScrollVY -= scrollDecel;
-  } else if(simulatedScrollVY < -0.0001) {
+  } else if(simulatedScrollVY < -scrollDecel / 5000) {
     simulatedScrollVY += scrollDecel;
   }
 
@@ -392,8 +399,23 @@ void updateSimulatedScroll() {
   }
 }
 
+const int simulatedScrollResolution = 1;
+
+int xClickInterval = 0;
+int yClickInterval = 0;
+
 void playSimulatedScroll() {
-  if(scrollTimerX % (int) (60 - simulatedScrollVX * 30) < 20 || scrollTimerY % (int) (60 - simulatedScrollVY * 30) < 20) {
+  if((int) (simulatedScrollX / simulatedScrollResolution) != xClickInterval) { // || (int) (simulatedScrollY * 10000) % (200 * 10000) == 0
+    xClickInterval = (int) (simulatedScrollX / simulatedScrollResolution);
     scrollClick();
+  } else {
+    delayMicroseconds(400);
   }
+}
+
+void resetSimulatedScroll() {
+  simulatedScrollVX = 0;
+  simulatedScrollVY = 0;
+  simulatedScrollX = 0;
+  simulatedScrollY = 0;
 }
